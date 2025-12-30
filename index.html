@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>DOORS</title>
+    <link rel="icon" type="image/png" href="images/doors_favicon.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* Шрифт Tiny5 */
+        @font-face {
+            font-family: 'Tiny5';
+            src: url('fonts/Tiny5-Regular.ttf') format('truetype');
+        }
+
+        body {
+            background-color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Tiny5', monospace;
+            overflow: hidden;
+        }
+
+        .score {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            color: #000;
+            font-size: 6vw;
+            z-index: 50;
+        }
+
+        .game-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .game-image {
+            width: 100vw;
+            height: auto;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            display: block;
+            -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* Зоны кликов поверх картинки */
+        .click-zones {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 10;
+            height: 100%;
+            display: flex;
+        }
+
+        .click-zone {
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .click-zone.disabled {
+            pointer-events: none;
+        }
+
+        /* Overlay для анимации влёта */
+        .fly-overlay {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .fly-overlay.active {
+            display: flex;
+        }
+
+        .fly-overlay img {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 100vw;
+            transform: translate(-50%, -50%) scale(0.25);
+            transform-origin: center center;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+        }
+
+        /* Плавная анимация увеличения overlay */
+        @keyframes zoom-in {
+            0% { transform: translate(-50%, -50%) scale(0.25); }
+            100% { transform: translate(-50%, -50%) scale(1); }
+        }
+
+        .fly-overlay img.zooming {
+            animation: zoom-in 0.5s linear forwards;
+        }
+
+        /* Плавная анимация увеличения основной картинки (влёт) */
+        @keyframes zoom-main {
+            0% { transform: scale(1); }
+            100% { transform: scale(4); }
+        }
+
+        .game-image.zooming {
+            animation: zoom-main 0.5s linear forwards;
+        }
+
+        /* Экран проигрыша */
+        .game-over {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 100;
+        }
+
+        .game-over.active {
+            display: flex;
+        }
+
+        .try-again {
+            color: #000;
+            font-size: 6vw;
+        }
+    </style>
+</head>
+<body>
+    <div class="score" id="score">0</div>
+
+    <div class="game-container" id="game-container">
+        <div class="fly-overlay" id="fly-overlay">
+            <img src="images/2doors.png" alt="Next Doors" id="fly-image">
+        </div>
+
+        <img src="images/2doors.png" alt="Doors" class="game-image" id="game-image">
+
+        <div class="click-zones" id="click-zones">
+            <div class="click-zone" id="left-zone" data-side="left"></div>
+            <div class="click-zone" id="right-zone" data-side="right"></div>
+        </div>
+    </div>
+
+    <div class="game-over" id="game-over">
+        <div class="try-again">try again</div>
+    </div>
+
+    <script>
+        const gameImage = document.getElementById('game-image');
+        const gameContainer = document.getElementById('game-container');
+        const flyOverlay = document.getElementById('fly-overlay');
+        const flyImage = document.getElementById('fly-image');
+        const leftZone = document.getElementById('left-zone');
+        const rightZone = document.getElementById('right-zone');
+        const gameOver = document.getElementById('game-over');
+        const scoreDisplay = document.getElementById('score');
+
+        let score = 0;
+        let isProcessing = false;
+
+        // Картинки
+        const IMAGES = {
+            twoDoors: 'images/2doors.png',
+            left: {
+                frame0: 'images/left_door_0.png',
+                frame1: 'images/left_door_1_w.png'
+            },
+            right: {
+                frame0: 'images/right_door_0.png',
+                frame1: 'images/right_door_1_w.png'
+            }
+        };
+
+        // Предзагрузка всех картинок
+        [
+            IMAGES.twoDoors,
+            ...Object.values(IMAGES.left),
+            ...Object.values(IMAGES.right)
+        ].forEach(src => {
+            const img = new Image();
+            img.src = src;
+        });
+
+        function disableClicks() {
+            leftZone.classList.add('disabled');
+            rightZone.classList.add('disabled');
+        }
+
+        function enableClicks() {
+            leftZone.classList.remove('disabled');
+            rightZone.classList.remove('disabled');
+        }
+
+        function handleDoorClick(side) {
+            if (isProcessing) return;
+            isProcessing = true;
+            disableClicks();
+
+            const frames = IMAGES[side];
+
+            // Показываем frame0 (дверь начинает открываться)
+            gameImage.src = frames.frame0;
+
+            // 50/50 шанс
+            const isSuccess = Math.random() < 0.5;
+
+            if (isSuccess) {
+                // Показываем frame1 (открытая дверь) и 2doors (маленькая, без анимации)
+                setTimeout(() => {
+                    gameImage.src = frames.frame1;
+                    flyOverlay.classList.add('active');
+                    score++;
+                    scoreDisplay.textContent = score;
+                }, 300);
+
+                // Запускаем анимацию влёта
+                setTimeout(() => {
+                    flyImage.classList.add('zooming');
+                    gameImage.classList.add('zooming');
+                }, 600);
+
+                // После анимации - убираем overlay и показываем 2doors
+                setTimeout(() => {
+                    flyImage.classList.remove('zooming');
+                    flyOverlay.classList.remove('active');
+                    gameImage.classList.remove('zooming');
+                    gameImage.src = IMAGES.twoDoors;
+                    enableClicks();
+                    isProcessing = false;
+                }, 1100);
+            } else {
+                // Неудача - показываем game over после короткой паузы
+                setTimeout(() => {
+                    gameOver.classList.add('active');
+                    isProcessing = false;
+                }, 300);
+            }
+        }
+
+        function restartGame() {
+            score = 0;
+            scoreDisplay.textContent = score;
+            gameImage.src = IMAGES.twoDoors;
+            gameImage.classList.remove('zooming');
+            gameOver.classList.remove('active');
+            flyOverlay.classList.remove('active');
+            flyImage.classList.remove('zooming');
+            enableClicks();
+        }
+
+        // Event listeners
+        leftZone.addEventListener('click', () => handleDoorClick('left'));
+        rightZone.addEventListener('click', () => handleDoorClick('right'));
+        gameOver.addEventListener('click', restartGame);
+
+        // Поддержка touch для мобильных
+        leftZone.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            handleDoorClick('left');
+        });
+        rightZone.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            handleDoorClick('right');
+        });
+        gameOver.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            restartGame();
+        });
+    </script>
+</body>
+</html>
